@@ -9,6 +9,7 @@ from decentralizepy import utils
 from decentralizepy.graphs.Graph import Graph
 from decentralizepy.mappings.Linear import Linear
 from decentralizepy.node.DPSGDNode import DPSGDNode
+from decentralizepy.node.GossipNode import GossipNode
 
 
 def read_ini(file_path):
@@ -55,7 +56,7 @@ if __name__ == "__main__":
     for r in range(procs_per_machine):
         processes.append(
             mp.Process(
-                target=DPSGDNode,
+                target=GossipNode,
                 args=[
                     r,
                     m_id,
@@ -69,6 +70,8 @@ if __name__ == "__main__":
                     args.test_after,
                     args.train_evaluate_after,
                     args.reset_optimizer,
+                    1,
+                    5
                 ],
             )
         )

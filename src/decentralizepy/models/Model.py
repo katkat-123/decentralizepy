@@ -24,6 +24,8 @@ class Model(nn.Module):
         self.accumulated_changes = None
         self.shared_parameters_counter = None
 
+        self.age_t = 0
+
     def count_params(self, only_trainable=False):
         """
         Counts the total number of params

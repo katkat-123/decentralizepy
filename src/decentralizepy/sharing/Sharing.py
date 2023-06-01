@@ -102,14 +102,14 @@ class Sharing:
         """
         to_cat = []
         with torch.no_grad():
-            for _, v in self.model.state_dict().items():
+            for _, v in self.model.state_dict().items():    #gets each tensor
                 t = v.flatten()
-                to_cat.append(t)
-        flat = torch.cat(to_cat)
+                to_cat.append(t)    
+        flat = torch.cat(to_cat)    #concatenates all tensors, so flattens it
         data = dict()
-        data["params"] = flat.numpy()
+        data["params"] = flat.numpy()   #stores them as a numpy array
         logging.info("Model sending this round: {}".format(data["params"]))
-        return self.compress_data(data)
+        return self.compress_data(data) #simpiezei ta data, mallon den kanei tipota pros to parwn
 
     def deserialized_model(self, m):
         """
@@ -153,6 +153,47 @@ class Sharing:
         """
         pass
 
+    def _averaging_gossip(self, msg_deque):
+        """
+        follow paper guidelines, average w.r.t. model's age
+
+        """
+
+        with torch.no_grad():
+            total = dict()
+
+            data=msg_deque.popleft()
+            iteration, sender_age = data["iteration"], data["age"]
+            del data["degree"]
+            del data["iteration"]
+            del data["age"]
+            del data["CHANNEL"]
+
+            logging.debug(
+                "Averaging model from neighbor of iteration {}".format(
+                    iteration
+                )
+            )
+
+            data = self.deserialized_model(data) #kanei decompress to modelo tou geitona
+            
+            weight = sender_age/(sender_age+self.model.age_t)
+
+            for key, value in data.items(): #apothikevei sto total gia kathe value tou geitona epi to varos tou
+                total[key] = value * weight
+
+            for key, value in self.model.state_dict().items():  #prosthetei sto total kai to diko tou montelo, me weight oso menei gia na ftasei sto 1
+                total[key] += (1 - weight) * value 
+
+            #prepei na orisw to neo age tou topikou komvou ws to max (sender_age, self_age)
+            #giati alliws den tha mporesei na ginei swsta h ananewsh varwn, oso pio megalo to age simainei oti toso pio kainourio einai 
+            self.model.age_t = max(self.model.age_t, sender_age)
+
+        self.model.load_state_dict(total)
+        self._post_step()
+        self.communication_round += 1
+
+
     def _averaging(self, peer_deques):
         """
         Averages the received model with the local model
@@ -161,7 +202,7 @@ class Sharing:
         with torch.no_grad():
             total = dict()
             weight_total = 0
-            for i, n in enumerate(peer_deques):
+            for i, n in enumerate(peer_deques): #gia kathe geitona
                 data = peer_deques[n].popleft()
                 degree, iteration = data["degree"], data["iteration"]
                 del data["degree"]
@@ -172,26 +213,27 @@ class Sharing:
                         n, iteration
                     )
                 )
-                data = self.deserialized_model(data)
+                data = self.deserialized_model(data) #kanei decompress to modelo tou geitona
                 # Metro-Hastings
                 weight = 1 / (max(len(peer_deques), degree) + 1)
                 weight_total += weight
-                for key, value in data.items():
+                for key, value in data.items(): #apothikevei sto total gia kathe value tou geitona epi to varos tou
                     if key in total:
                         total[key] += value * weight
                     else:
                         total[key] = value * weight
 
-            for key, value in self.model.state_dict().items():
+            for key, value in self.model.state_dict().items():  #prosthetei sto total kai to diko tou montelo, me weight oso menei gia na ftasei sto 1
                 total[key] += (1 - weight_total) * value  # Metro-Hastings
 
         self.model.load_state_dict(total)
         self._post_step()
         self.communication_round += 1
 
+
     def get_data_to_send(self, degree=None):
         self._pre_step()
-        data = self.serialized_model()
+        data = self.serialized_model()  #ftiaxnei tous tensores se ena dictionary -> data["parameters"]={compressed data}
         my_uid = self.mapping.get_uid(self.rank, self.machine_id)
         data["degree"] = degree if degree != None else len(self.graph.neighbors(my_uid))
         data["iteration"] = self.communication_round

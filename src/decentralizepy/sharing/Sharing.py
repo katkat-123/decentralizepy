@@ -153,21 +153,23 @@ class Sharing:
         """
         pass
 
-    def _averaging_gossip(self, msg_deque):
+    def _averaging_gossip(self, data):
         """
-        follow paper guidelines, average w.r.t. model's age
+        average w.r.t. model's age
 
         """
 
         with torch.no_grad():
             total = dict()
 
-            data=msg_deque.popleft()
             iteration, sender_age = data["iteration"], data["age"]
             del data["degree"]
             del data["iteration"]
             del data["age"]
             del data["CHANNEL"]
+
+            if sender_age == 0:
+                return
 
             logging.debug(
                 "Averaging model from neighbor of iteration {}".format(
@@ -192,6 +194,70 @@ class Sharing:
         self.model.load_state_dict(total)
         self._post_step()
         self.communication_round += 1
+
+
+    def _averaging_gossip_queue(self, gossip_queue):
+        """
+        Averages the local model with all the received models
+
+        """
+
+        if gossip_queue.empty():
+            return
+
+
+        with torch.no_grad():
+            total = dict()
+
+            queue_size = gossip_queue.qsize()
+            
+            max_age = self.model.age_t
+            ages_sum = self.model.age_t
+            # for i in range(queue_size):
+            #     sender_age = gossip_queue.get(i)["age"]
+                
+        
+            for i in range(queue_size): #gia kathe geitona
+                data = gossip_queue.get(i)
+                iteration, sender_age, rank, machine_id = data["iteration"], data["age"], data["rank"], data["machine_id"]
+                del data["degree"]
+                del data["rank"]
+                del data["machine_id"]
+                del data["age"]
+                del data["iteration"]
+                del data["CHANNEL"]
+                logging.debug(
+                    "Averaging model from neighbor {} of machine {} of iteration {}".format(
+                        rank, machine_id, iteration
+                    )
+                )
+
+                max_age = sender_age if sender_age > max_age else max_age
+
+                data = self.deserialized_model(data) #kanei decompress to modelo tou geitona
+                
+                # weight = sender_age/ages_sum
+                ages_sum += sender_age
+
+                for key, value in data.items(): #apothikevei sto total gia kathe value tou geitona epi to varos tou
+                    if key in total:
+                        total[key] += value * sender_age
+                    else:
+                        total[key] = value * sender_age
+
+            for key, value in self.model.state_dict().items():  #prosthetei sto total kai to diko tou montelo
+                if key in total:
+                    total[key] += (self.model.age_t) * value  
+                else:
+                    total[key] = (self.model.age_t) * value
+
+
+            for key in total: 
+                total[key] /= ages_sum
+
+        self.model.load_state_dict(total)
+        self._post_step()
+        self.communication_round += 1 #xreiazetai afto?
 
 
     def _averaging(self, peer_deques):
@@ -248,7 +314,7 @@ class Sharing:
             total = dict()
             for i, n in enumerate(peer_deques):
                 data = peer_deques[n].popleft()
-                degree, iteration = data["degree"], data["iteration"]
+                degree, iteration = data["rank"], data["iteration"]
                 del data["degree"]
                 del data["iteration"]
                 del data["CHANNEL"]

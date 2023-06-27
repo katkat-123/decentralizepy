@@ -13,6 +13,8 @@ def get_stats(l):
     assert len(l) > 0
     mean_dict, stdev_dict, min_dict, max_dict = {}, {}, {}, {}
     for key in l[0].keys():
+        if int(key)>94:
+            continue
         all_nodes = [i[key] for i in l]
         all_nodes = np.array(all_nodes)
         mean = np.mean(all_nodes)
@@ -81,6 +83,9 @@ def plot_results(path, centralized, data_machine="machine0", data_node=0):
         with open(folder_path / data_machine / f"{data_node}_results.json", "r") as f:
             main_data = json.load(f)
         main_data = [main_data]
+
+
+        print(len(results))
 
         # Plotting bytes over time
         plt.figure(10)

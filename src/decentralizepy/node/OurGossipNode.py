@@ -98,8 +98,7 @@ class OurGossipNode(Node):
         change = 1
 
 
-
-        #create thread for sending periodically the local model to neighbors
+        #create thread for receiving neighbors' models
         self.stopper = threading.Event()
         receiver_thread = threading.Thread(target=self.receive_and_merge)
         logging.debug("KAT: Created thread")
@@ -110,12 +109,13 @@ class OurGossipNode(Node):
         iteration = 0
 
         while(True):
-        # for iteration in range(self.iterations):
-
+            
+            if time.time() >= t_end:    #stop the training after a specific amount of time
+                break
+            
             logging.info("Starting training iteration: %d", iteration)
             rounds_to_train_evaluate -= 1
             rounds_to_test -= 1
-
             self.iteration = iteration
 
 
@@ -125,20 +125,9 @@ class OurGossipNode(Node):
 
             logging.debug("KATERINA: training ended")
 
-            self.sharing._averaging_gossip_queue(self.msg_queue)        #aggregate
+            no_of_aggr_msgs = self.sharing._averaging_gossip_queue(self.msg_queue)        #aggregate
 
             new_neighbors = self.get_neighbors()    #from the graph module, get who my neighbors are
-
-            # The following code does not work because TCP sockets are supposed to be long lived.
-            # for neighbor in self.my_neighbors:
-            #     if neighbor not in new_neighbors:
-            #         logging.info("Removing neighbor {}".format(neighbor))
-            #         if neighbor in self.peer_deques:
-            #             assert len(self.peer_deques[neighbor]) == 0
-            #             del self.peer_deques[neighbor]
-            #         self.communication.destroy_connection(neighbor, linger = 10000)
-            #         self.barrier.remove(neighbor)
-
             self.my_neighbors = new_neighbors
             self.connect_neighbors()
             logging.debug("Connected to all neighbors")
@@ -175,9 +164,12 @@ class OurGossipNode(Node):
                     "total_bytes": {},
                     "total_meta": {},
                     "total_data_per_n": {},
+                    "aggregated_msgs": {}
                 }
 
-            results_dict["total_bytes"][iteration + 1] = self.communication.total_bytes
+            results_dict["total_bytes"][iteration + 1] = self.communication.total_bytes            
+            results_dict["aggregated_msgs"][iteration + 1] = no_of_aggr_msgs
+
 
             if hasattr(self.communication, "total_meta"):   #saving more metadata?
                 results_dict["total_meta"][
@@ -220,8 +212,7 @@ class OurGossipNode(Node):
 
             iteration += 1
 
-            if time.time() >= t_end:    #stop the training after a specific amount of time
-                break
+            
 
 
         #terminate the sending thread

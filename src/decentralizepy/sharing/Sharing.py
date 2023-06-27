@@ -170,16 +170,24 @@ class Sharing:
 
             if sender_age == 0:
                 return
+            
+
 
             logging.debug(
-                "Averaging model from neighbor of iteration {}".format(
-                    iteration
+                "Averaging model from neighbor of iteration {} with age {}".format(
+                    iteration, sender_age
                 )
             )
 
             data = self.deserialized_model(data) #kanei decompress to modelo tou geitona
             
             weight = sender_age/(sender_age+self.model.age_t)
+
+            logging.debug(
+                "weight for averaging is {}".format(
+                    weight
+                )
+            )
 
             for key, value in data.items(): #apothikevei sto total gia kathe value tou geitona epi to varos tou
                 total[key] = value * weight
@@ -191,9 +199,55 @@ class Sharing:
             #giati alliws den tha mporesei na ginei swsta h ananewsh varwn, oso pio megalo to age simainei oti toso pio kainourio einai 
             self.model.age_t = max(self.model.age_t, sender_age)
 
+            logging.debug(
+                "new age is {}".format(
+                    self.model.age_t
+                )
+            )
+
         self.model.load_state_dict(total)
         self._post_step()
         self.communication_round += 1
+
+
+    # def _averaging_gossip(self, msg_deque):
+    #     """
+    #     follow paper guidelines, average w.r.t. model's age
+    #     """
+
+    #     with torch.no_grad():
+    #         total = dict()
+
+    #         data=msg_deque.popleft()
+    #         iteration, sender_age = data["iteration"], data["age"]
+    #         del data["degree"]
+    #         del data["iteration"]
+    #         del data["age"]
+    #         del data["CHANNEL"]
+
+    #         logging.debug(
+    #             "Averaging model from neighbor of iteration {}".format(
+    #                 iteration
+    #             )
+    #         )
+
+    #         data = self.deserialized_model(data) #kanei decompress to modelo tou geitona
+
+    #         weight = sender_age/(sender_age+self.model.age_t)
+
+    #         for key, value in data.items(): #apothikevei sto total gia kathe value tou geitona epi to varos tou
+    #             total[key] = value * weight
+
+    #         for key, value in self.model.state_dict().items():  #prosthetei sto total kai to diko tou montelo, me weight oso menei gia na ftasei sto 1
+    #             total[key] += (1 - weight) * value 
+
+    #         #prepei na orisw to neo age tou topikou komvou ws to max (sender_age, self_age)
+    #         #giati alliws den tha mporesei na ginei swsta h ananewsh varwn, oso pio megalo to age simainei oti toso pio kainourio einai 
+    #         self.model.age_t = max(self.model.age_t, sender_age)
+
+    #     self.model.load_state_dict(total)
+    #     self._post_step()
+    #     self.communication_round += 1
 
 
     def _averaging_gossip_queue(self, gossip_queue):
@@ -203,7 +257,7 @@ class Sharing:
         """
 
         if gossip_queue.empty():
-            return
+            return 0
 
 
         with torch.no_grad():
@@ -236,7 +290,6 @@ class Sharing:
 
                 data = self.deserialized_model(data) #kanei decompress to modelo tou geitona
                 
-                # weight = sender_age/ages_sum
                 ages_sum += sender_age
 
                 for key, value in data.items(): #apothikevei sto total gia kathe value tou geitona epi to varos tou
@@ -255,9 +308,13 @@ class Sharing:
             for key in total: 
                 total[key] /= ages_sum
 
+            self.model.age_t = max_age
+
         self.model.load_state_dict(total)
         self._post_step()
         self.communication_round += 1 #xreiazetai afto?
+
+        return queue_size
 
 
     def _averaging(self, peer_deques):

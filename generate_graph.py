@@ -3,6 +3,9 @@ from decentralizepy.graphs.FullyConnected import FullyConnected
 from decentralizepy.graphs.Ring import Ring
 from decentralizepy.graphs.SmallWorld import SmallWorld
 from decentralizepy.graphs.Star import Star
+
+from decentralizepy.graphs.Bipartite import Bipartite
+
 import getopt, sys
 
 if __name__ == "__main__":
@@ -86,6 +89,8 @@ if __name__ == "__main__":
             g = SmallWorld(num_nodes, k_over_2, beta)
         elif graph_type == 'Star':
             g = Star(num_nodes)
+        elif graph_type == 'Bipartite':
+            g = Bipartite(num_nodes)
         else:
             raise ValueError("Invalid graph type: " + graph_type)
         

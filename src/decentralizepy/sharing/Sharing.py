@@ -153,6 +153,39 @@ class Sharing:
         """
         pass
 
+
+    def _averaging_ADPSGD(self, data):
+        """
+        average two models with weight of 0.5 each
+
+        """
+
+        with torch.no_grad():
+            total = dict()
+
+            iteration, sender_uid = data["iteration"], data["sender_uid"]
+            del data["degree"]
+            del data["iteration"]
+            del data["sender_uid"]
+            del data["CHANNEL"]
+
+            logging.debug("averaging model from neighbor of iteration {} of neighbor {}".format(iteration, sender_uid))
+
+            data = self.deserialized_model(data)
+           
+            weight = 0.5
+
+            for key, value in data.items():
+                total[key] = weight * value
+
+            for key, value in self.model.state_dict().items():
+                total[key] += (1 - weight) * value
+
+        self.model.load_state_dict(total)
+        self._post_step()
+        self.communication_round += 1
+
+
     def _averaging_gossip(self, data):
         """
         average w.r.t. model's age
@@ -172,7 +205,6 @@ class Sharing:
                 return
             
 
-
             logging.debug(
                 "Averaging model from neighbor of iteration {} with age {}".format(
                     iteration, sender_age
@@ -182,7 +214,7 @@ class Sharing:
             data = self.deserialized_model(data) #kanei decompress to modelo tou geitona
             
             weight = sender_age/(sender_age+self.model.age_t)
-
+            
             logging.debug(
                 "weight for averaging is {}".format(
                     weight

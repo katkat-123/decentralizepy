@@ -37,6 +37,7 @@ class TCP(Communication):
             Full address of the process using TCP
 
         """
+        
         machine_addr = socket.gethostbyname(self.ip_addrs[str(machine_id)])
         port = (2 * rank + 1) + self.offset
         assert port > 0

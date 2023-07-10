@@ -2,28 +2,28 @@
 script_path=$(realpath $(dirname $0))
 
 # Working directory, where config files are read from and logs are written.
-decpy_path=/mnt/nfs/$(whoami)/decpy_workingdir
+decpy_path=/mnt/nfs/$(whoami)/decentralizepy/eval
 cd $decpy_path
 
 # Python interpreter
 env_python=python3
 
 # File regular_16.txt is available in /tutorial
-graph=$decpy_path/regular_16.txt
+graph=$decpy_path/4_node_fullyConnected.edges
 
 # File config_celeba_sharing.ini is available in /tutorial
 # In this config file, change addresses_filepath to correspond to your list of machines (example in /tutorial/ip.json)
-original_config=$decpy_path/config_celeba_sharing.ini
+original_config=$decpy_path/step_configs/config_cifar_sharing.ini
 
 # Local config file
 config_file=/tmp/$(basename $original_config)
 
 # Python script to be executed
-eval_file=$script_path/testingPeerSampler.py
+eval_file=$script_path/testing.py
 
 # General parameters
-procs_per_machine=8
-machines=2
+procs_per_machine=4
+machines=1
 iterations=5
 test_after=2
 log_level=INFO

@@ -71,7 +71,7 @@ if __name__ == "__main__":
                     args.train_evaluate_after,
                     args.reset_optimizer,
                     1,
-                    5
+                    40
                 ],
             )
         )

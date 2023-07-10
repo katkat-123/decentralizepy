@@ -120,6 +120,10 @@ class Node:
                 self.communication.send(uid, {"BYE": self.uid, "CHANNEL": "DISCONNECT"})
             self.sent_disconnections = True
             while len(self.barrier):
+                logging.debug(
+                    "waiting for disconnect from {} neighbors".format( len(self.barrier)
+                    )
+                )
                 sender, _ = self.receive_disconnect()
                 self.barrier.remove(sender)
 

@@ -58,30 +58,31 @@ class OurGossipNode(Node):
         return self.receive_channel("GOSSIP", False)
 
 
-    def receive_and_merge(self):
+    def receive_and_append(self):
 
         while(True):
 
             if self.stopper.is_set():
-                logging.debug("KAT-thread: Teleiwsa")
+                logging.debug("receiver-thread: Finished")
                 break
 
+            #receive from neighbor
             try:
-                sender, data = self.receive_GOSSIP() #receive from neighbor
-            except TypeError:   #epestrepse none=xtipise timeout, ara ksanampes sti loopa
+                sender, data = self.receive_GOSSIP() 
+            except TypeError:   #in case of timeout
                 continue
 
             logging.debug(
-                    "Received Model from {} of iteration {}".format(    #to iteration exei noima? afou einai gossip
+                    "Received Model from {} of iteration {}".format(
                         sender, data["iteration"]
                     )
             )            
 
-            #append the models received to the queue, to aggregate them later
+            #append the model received to the queue to aggregate them later
             self.msg_queue.put(data)
 
             
-        logging.debug("KAT-thread: Out of loop")
+        logging.debug("receiver-thread: Out of loop")
 
 
     def run(self):
@@ -100,8 +101,8 @@ class OurGossipNode(Node):
 
         #create thread for receiving neighbors' models
         self.stopper = threading.Event()
-        receiver_thread = threading.Thread(target=self.receive_and_merge)
-        logging.debug("KAT: Created thread")
+        receiver_thread = threading.Thread(target=self.receive_and_append)
+        logging.debug("Receiver thread created")
         receiver_thread.start()
         
         t_end = time.time() + 60 * self.training_time
@@ -110,7 +111,7 @@ class OurGossipNode(Node):
 
         while(True):
             
-            if time.time() >= t_end:    #stop the training after a specific amount of time
+            if time.time() >= t_end:    #stop the training after a specific period of time
                 break
             
             logging.info("Starting training iteration: %d", iteration)
@@ -119,15 +120,13 @@ class OurGossipNode(Node):
             self.iteration = iteration
 
 
-            logging.debug("KATERINA: training started")
+            #train
+            self.trainer.train(self.dataset)
 
-            self.trainer.train(self.dataset)    #kanei update to topiko modelo me ena tixaio batch topikwn dedomenwn me vasi kapoion optimizer
+            #aggregate
+            no_of_aggr_msgs = self.sharing._averaging_gossip_queue(self.msg_queue)
 
-            logging.debug("KATERINA: training ended")
-
-            no_of_aggr_msgs = self.sharing._averaging_gossip_queue(self.msg_queue)        #aggregate
-
-            new_neighbors = self.get_neighbors()    #from the graph module, get who my neighbors are
+            new_neighbors = self.get_neighbors()
             self.my_neighbors = new_neighbors
             self.connect_neighbors()
             logging.debug("Connected to all neighbors")
@@ -135,22 +134,21 @@ class OurGossipNode(Node):
             neighbors_list = list(self.my_neighbors)
             peer_to_send = random.choice(neighbors_list)
 
-            to_send = self.sharing.get_data_to_send(degree=len(self.my_neighbors))  #epistrefei ena dictionary me pedia: parameters, degree, iteration + prepei na valw kai to age
+            to_send = self.sharing.get_data_to_send(degree=len(self.my_neighbors))
             to_send["CHANNEL"] = "GOSSIP"
             to_send["age"] = self.model.age_t
-            to_send["rank"] = self.rank
-            to_send["machine_id"] = self.machine_id
 
+            #send
             self.communication.send(peer_to_send, to_send)
 
         
-            if self.reset_optimizer:    #kanei reset ton optimizer, an mas to leei to config
+            if self.reset_optimizer: 
                 self.optimizer = self.optimizer_class(
                     self.model.parameters(), **self.optimizer_params
-                )  # Reset optimizer state
+                ) 
                 self.trainer.reset_optimizer(self.optimizer)
 
-            if iteration:   #saving the metrics
+            if iteration:
                 with open(
                     os.path.join(self.log_dir, "{}_results.json".format(self.rank)),
                     "r",
@@ -171,7 +169,7 @@ class OurGossipNode(Node):
             results_dict["aggregated_msgs"][iteration + 1] = no_of_aggr_msgs
 
 
-            if hasattr(self.communication, "total_meta"):   #saving more metadata?
+            if hasattr(self.communication, "total_meta"):
                 results_dict["total_meta"][
                     iteration + 1
                 ] = self.communication.total_meta
@@ -180,10 +178,10 @@ class OurGossipNode(Node):
                     iteration + 1
                 ] = self.communication.total_data
 
-            if rounds_to_train_evaluate == 0:   #evaluating after fixed size of iterations
+            if rounds_to_train_evaluate == 0:
                 logging.info("Evaluating on train set.")
                 rounds_to_train_evaluate = self.train_evaluate_after * change
-                loss_after_sharing = self.trainer.eval_loss(self.dataset)   #trainer eval loss -> check
+                loss_after_sharing = self.trainer.eval_loss(self.dataset)
                 results_dict["train_loss"][iteration + 1] = loss_after_sharing
                 self.save_plot(
                     results_dict["train_loss"],
@@ -193,10 +191,10 @@ class OurGossipNode(Node):
                     os.path.join(self.log_dir, "{}_train_loss.png".format(self.rank)),
                 )
 
-            if self.dataset.__testing__ and rounds_to_test == 0:    #evaluating on test set
+            if self.dataset.__testing__ and rounds_to_test == 0:
                 rounds_to_test = self.test_after * change
                 logging.info("Evaluating on test set.")
-                ta, tl = self.dataset.test(self.model, self.loss)   #to test ginetai sto module dataset
+                ta, tl = self.dataset.test(self.model, self.loss)  
                 results_dict["test_acc"][iteration + 1] = ta
                 results_dict["test_loss"][iteration + 1] = tl
 
@@ -213,10 +211,8 @@ class OurGossipNode(Node):
             iteration += 1
 
             
-
-
-        #terminate the sending thread
-        logging.info("KAT: time passed - waiting for thread to join")
+        #terminate the receiving thread
+        logging.info("time passed - waiting for receiving thread to join")
         self.stopper.set()
         receiver_thread.join() 
     
@@ -230,9 +226,9 @@ class OurGossipNode(Node):
             ) as of:
                 json.dump(self.model.shared_parameters_counter.numpy().tolist(), of)
         
-        self.disconnect_neighbors() #meta ta iterations, aposindesi apo geitones
+        self.disconnect_neighbors()
         logging.info("Storing final weight")
-        self.model.dump_weights(self.weights_store_dir, self.uid, iteration)    #apothikefsh twn weights sto modelo
+        self.model.dump_weights(self.weights_store_dir, self.uid, iteration)
         logging.info("All neighbors disconnected. Process complete!")
 
     def cache_fields(
@@ -323,7 +319,7 @@ class OurGossipNode(Node):
         test_after=5,
         train_evaluate_after=1,
         reset_optimizer=1,
-        training_time=5, #in minutes, kat: new add
+        training_time=5, #in minutes
         *args
     ):
         """
@@ -407,7 +403,7 @@ class OurGossipNode(Node):
         test_after=5,
         train_evaluate_after=1,
         reset_optimizer=1,
-        training_time=5, #in minutes, kat: new add
+        training_time=5, #in minutes
         *args
     ):
         """

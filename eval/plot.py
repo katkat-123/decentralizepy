@@ -12,9 +12,15 @@ from matplotlib import pyplot as plt
 def get_stats(l):
     assert len(l) > 0
     mean_dict, stdev_dict, min_dict, max_dict = {}, {}, {}, {}
-    for key in l[0].keys():
-        if int(key)>94:
-            continue
+    
+    min_keys = l[0].keys()
+    for node_stats in l:
+        if len(node_stats.keys()) < len(min_keys):
+            min_keys = node_stats.keys()
+
+    
+
+    for key in min_keys:
         all_nodes = [i[key] for i in l]
         all_nodes = np.array(all_nodes)
         mean = np.mean(all_nodes)
@@ -60,22 +66,22 @@ def plot_results(path, centralized, data_machine="machine0", data_node=0):
     bytes_means, bytes_stdevs = {}, {}
     meta_means, meta_stdevs = {}, {}
     data_means, data_stdevs = {}, {}
-    for folder in folders:
+    for folder in folders:  #apo to path pou edwsa vlepei ta folders
         folder_path = Path(os.path.join(path, folder))
         if not folder_path.is_dir() or "weights" == folder_path.name:
             continue
         results = []
         machine_folders = os.listdir(folder_path)
-        for machine_folder in machine_folders:
-            mf_path = os.path.join(folder_path, machine_folder)
+        for machine_folder in machine_folders:  #gia kathe machine fakelo
+            mf_path = os.path.join(folder_path, machine_folder) 
             if not os.path.isdir(mf_path):
                 continue
             files = os.listdir(mf_path)
-            files = [f for f in files if f.endswith("_results.json")]
-            for f in files:
+            files = [f for f in files if f.endswith("_results.json")]   #pairnei ta results.json tou kathe node
+            for f in files: #gia kathe results.json
                 filepath = os.path.join(mf_path, f)
                 with open(filepath, "r") as inf:
-                    results.append(json.load(inf))
+                    results.append(json.load(inf))      #to results einai enas pinakas apo json objects (ta results tou kathe node)
         if folder.startswith("FL") or folder.startswith("Parameter Server"):
             data_node = -1
         else:
@@ -88,88 +94,88 @@ def plot_results(path, centralized, data_machine="machine0", data_node=0):
         print(len(results))
 
         # Plotting bytes over time
-        plt.figure(10)
+        # plt.figure(10)
         b_means, stdevs, mins, maxs = get_stats([x["total_bytes"] for x in results])
-        plot(b_means, stdevs, mins, maxs, "Total Bytes", folder, "lower right")
-        df = pd.DataFrame(
-            {
-                "mean": list(b_means.values()),
-                "std": list(stdevs.values()),
-                "nr_nodes": [len(results)] * len(b_means),
-            },
-            list(b_means.keys()),
-            columns=["mean", "std", "nr_nodes"],
-        )
-        df.to_csv(
-            os.path.join(path, "total_bytes_" + folder + ".csv"), index_label="rounds"
-        )
+        # plot(b_means, stdevs, mins, maxs, "Total Bytes", folder, "lower right")
+        # df = pd.DataFrame(
+        #     {
+        #         "mean": list(b_means.values()),
+        #         "std": list(stdevs.values()),
+        #         "nr_nodes": [len(results)] * len(b_means),
+        #     },
+        #     list(b_means.keys()),
+        #     columns=["mean", "std", "nr_nodes"],
+        # )
+        # df.to_csv(
+        #     os.path.join(path, "total_bytes_" + folder + ".csv"), index_label="rounds"
+        # )
 
         # Plot Training loss
-        plt.figure(1)
+        # plt.figure(1)
         means, stdevs, mins, maxs = get_stats([x["train_loss"] for x in results])
-        plot(means, stdevs, mins, maxs, "Training Loss", folder, "upper right")
+        # plot(means, stdevs, mins, maxs, "Training Loss", folder, "upper right")
 
         correct_bytes = [b_means[x] for x in means]
 
-        df = pd.DataFrame(
-            {
-                "mean": list(means.values()),
-                "std": list(stdevs.values()),
-                "nr_nodes": [len(results)] * len(means),
-                "total_bytes": correct_bytes,
-            },
-            list(means.keys()),
-            columns=["mean", "std", "nr_nodes", "total_bytes"],
-        )
-        plt.figure(11)
-        means = replace_dict_key(means, b_means)
-        plot(
-            means,
-            stdevs,
-            mins,
-            maxs,
-            "Training Loss",
-            folder,
-            "upper right",
-            "Total Bytes per node",
-        )
+        # df = pd.DataFrame(
+        #     {
+        #         "mean": list(means.values()),
+        #         "std": list(stdevs.values()),
+        #         "nr_nodes": [len(results)] * len(means),
+        #         "total_bytes": correct_bytes,
+        #     },
+        #     list(means.keys()),
+        #     columns=["mean", "std", "nr_nodes", "total_bytes"],
+        # )
+        # plt.figure(11)
+        # means = replace_dict_key(means, b_means)
+        # plot(
+        #     means,
+        #     stdevs,
+        #     mins,
+        #     maxs,
+        #     "Training Loss",
+        #     folder,
+        #     "upper right",
+        #     "Total Bytes per node",
+        # )
 
-        df.to_csv(
-            os.path.join(path, "train_loss_" + folder + ".csv"), index_label="rounds"
-        )
+        # df.to_csv(
+        #     os.path.join(path, "train_loss_" + folder + ".csv"), index_label="rounds"
+        # )
         # Plot Testing loss
-        plt.figure(2)
-        if centralized:
-            means, stdevs, mins, maxs = get_stats([x["test_loss"] for x in main_data])
-        else:
-            means, stdevs, mins, maxs = get_stats([x["test_loss"] for x in results])
-        plot(means, stdevs, mins, maxs, "Testing Loss", folder, "upper right")
-        df = pd.DataFrame(
-            {
-                "mean": list(means.values()),
-                "std": list(stdevs.values()),
-                "nr_nodes": [len(results)] * len(means),
-                "total_bytes": correct_bytes,
-            },
-            list(means.keys()),
-            columns=["mean", "std", "nr_nodes", "total_bytes"],
-        )
-        plt.figure(12)
-        means = replace_dict_key(means, b_means)
-        plot(
-            means,
-            stdevs,
-            mins,
-            maxs,
-            "Testing Loss",
-            folder,
-            "upper right",
-            "Total Bytes per node",
-        )
+        # plt.figure(2)
+        # if centralized:
+        #     means, stdevs, mins, maxs = get_stats([x["test_loss"] for x in main_data])
+        # else:
+        #     means, stdevs, mins, maxs = get_stats([x["test_loss"] for x in results])
+        # plot(means, stdevs, mins, maxs, "Testing Loss", folder, "upper right")
+        # df = pd.DataFrame(
+        #     {
+        #         "mean": list(means.values()),
+        #         "std": list(stdevs.values()),
+        #         "nr_nodes": [len(results)] * len(means),
+        #         "total_bytes": correct_bytes,
+        #     },
+        #     list(means.keys()),
+        #     columns=["mean", "std", "nr_nodes", "total_bytes"],
+        # )
+        # plt.figure(12)
+        # means = replace_dict_key(means, b_means)
+        # plot(
+        #     means,
+        #     stdevs,
+        #     mins,
+        #     maxs,
+        #     "Testing Loss",
+        #     folder,
+        #     "upper right",
+        #     "Total Bytes per node",
+        # )
 
-        df.to_csv(
-            os.path.join(path, "test_loss_" + folder + ".csv"), index_label="rounds"
-        )
+        # df.to_csv(
+        #     os.path.join(path, "test_loss_" + folder + ".csv"), index_label="rounds"
+        # )
         # Plot Testing Accuracy
         plt.figure(3)
         if centralized:
@@ -177,113 +183,113 @@ def plot_results(path, centralized, data_machine="machine0", data_node=0):
         else:
             means, stdevs, mins, maxs = get_stats([x["test_acc"] for x in results])
         plot(means, stdevs, mins, maxs, "Testing Accuracy", folder, "lower right")
-        df = pd.DataFrame(
-            {
-                "mean": list(means.values()),
-                "std": list(stdevs.values()),
-                "nr_nodes": [len(results)] * len(means),
-                "total_bytes": correct_bytes,
-            },
-            list(means.keys()),
-            columns=["mean", "std", "nr_nodes", "total_bytes"],
-        )
-        plt.figure(13)
-        means = replace_dict_key(means, b_means)
-        plot(
-            means,
-            stdevs,
-            mins,
-            maxs,
-            "Testing Accuracy",
-            folder,
-            "lower right",
-            "Total Bytes per node",
-        )
-        df.to_csv(
-            os.path.join(path, "test_acc_" + folder + ".csv"), index_label="rounds"
-        )
+        # df = pd.DataFrame(
+        #     {
+        #         "mean": list(means.values()),
+        #         "std": list(stdevs.values()),
+        #         "nr_nodes": [len(results)] * len(means),
+        #         "total_bytes": correct_bytes,
+        #     },
+        #     list(means.keys()),
+        #     columns=["mean", "std", "nr_nodes", "total_bytes"],
+        # )
+        # plt.figure(13)
+        # means = replace_dict_key(means, b_means)
+        # plot(
+        #     means,
+        #     stdevs,
+        #     mins,
+        #     maxs,
+        #     "Testing Accuracy",
+        #     folder,
+        #     "lower right",
+        #     "Total Bytes per node",
+        # )
+        # df.to_csv(
+        #     os.path.join(path, "test_acc_" + folder + ".csv"), index_label="rounds"
+        # )
 
         # Collect total_bytes shared
-        bytes_list = []
-        for x in results:
-            max_key = str(max(list(map(int, x["total_bytes"].keys()))))
-            bytes_list.append({max_key: x["total_bytes"][max_key]})
-        means, stdevs, mins, maxs = get_stats(bytes_list)
-        bytes_means[folder] = list(means.values())[0]
-        bytes_stdevs[folder] = list(stdevs.values())[0]
+        # bytes_list = []
+        # for x in results:
+        #     max_key = str(max(list(map(int, x["total_bytes"].keys()))))
+        #     bytes_list.append({max_key: x["total_bytes"][max_key]})
+        # means, stdevs, mins, maxs = get_stats(bytes_list)
+        # bytes_means[folder] = list(means.values())[0]
+        # bytes_stdevs[folder] = list(stdevs.values())[0]
 
-        meta_list = []
-        for x in results:
-            if x["total_meta"]:
-                max_key = str(max(list(map(int, x["total_meta"].keys()))))
-                meta_list.append({max_key: x["total_meta"][max_key]})
-            else:
-                meta_list.append({max_key: 0})
-        means, stdevs, mins, maxs = get_stats(meta_list)
-        meta_means[folder] = list(means.values())[0]
-        meta_stdevs[folder] = list(stdevs.values())[0]
+        # meta_list = []
+        # for x in results:
+        #     if x["total_meta"]:
+        #         max_key = str(max(list(map(int, x["total_meta"].keys()))))
+        #         meta_list.append({max_key: x["total_meta"][max_key]})
+        #     else:
+        #         meta_list.append({max_key: 0})
+        # means, stdevs, mins, maxs = get_stats(meta_list)
+        # meta_means[folder] = list(means.values())[0]
+        # meta_stdevs[folder] = list(stdevs.values())[0]
 
-        data_list = []
-        for x in results:
-            max_key = str(max(list(map(int, x["total_data_per_n"].keys()))))
-            data_list.append({max_key: x["total_data_per_n"][max_key]})
-        means, stdevs, mins, maxs = get_stats(data_list)
-        data_means[folder] = list(means.values())[0]
-        data_stdevs[folder] = list(stdevs.values())[0]
+        # data_list = []
+        # for x in results:
+        #     max_key = str(max(list(map(int, x["total_data_per_n"].keys()))))
+        #     data_list.append({max_key: x["total_data_per_n"][max_key]})
+        # means, stdevs, mins, maxs = get_stats(data_list)
+        # data_means[folder] = list(means.values())[0]
+        # data_stdevs[folder] = list(stdevs.values())[0]
 
-    plt.figure(10)
-    plt.savefig(os.path.join(path, "total_bytes.png"), dpi=300)
-    plt.figure(11)
-    plt.savefig(os.path.join(path, "bytes_train_loss.png"), dpi=300)
-    plt.figure(12)
-    plt.savefig(os.path.join(path, "bytes_test_loss.png"), dpi=300)
-    plt.figure(13)
-    plt.savefig(os.path.join(path, "bytes_test_acc.png"), dpi=300)
+    # plt.figure(10)
+    # plt.savefig(os.path.join(path, "total_bytes.png"), dpi=300)
+    # plt.figure(11)
+    # plt.savefig(os.path.join(path, "bytes_train_loss.png"), dpi=300)
+    # plt.figure(12)
+    # plt.savefig(os.path.join(path, "bytes_test_loss.png"), dpi=300)
+    # plt.figure(13)
+    # plt.savefig(os.path.join(path, "bytes_test_acc.png"), dpi=300)
 
-    plt.figure(1)
-    plt.savefig(os.path.join(path, "train_loss.png"), dpi=300)
-    plt.figure(2)
-    plt.savefig(os.path.join(path, "test_loss.png"), dpi=300)
+    # plt.figure(1)
+    # plt.savefig(os.path.join(path, "train_loss.png"), dpi=300)
+    # plt.figure(2)
+    # plt.savefig(os.path.join(path, "test_loss.png"), dpi=300)
     plt.figure(3)
     plt.savefig(os.path.join(path, "test_acc.png"), dpi=300)
     # Plot total_bytes
-    plt.figure(4)
-    plt.title("Data Shared")
-    x_pos = np.arange(len(bytes_means.keys()))
-    plt.bar(
-        x_pos,
-        np.array(list(bytes_means.values())) // (1024 * 1024),
-        yerr=np.array(list(bytes_stdevs.values())) // (1024 * 1024),
-        align="center",
-    )
-    plt.ylabel("Total data shared in MBs")
-    plt.xlabel("Fraction of Model Shared")
-    plt.xticks(x_pos, list(bytes_means.keys()))
-    plt.savefig(os.path.join(path, "data_shared.png"), dpi=300)
+    # plt.figure(4)
+    # plt.title("Data Shared")
+    # x_pos = np.arange(len(bytes_means.keys()))
+    # plt.bar(
+    #     x_pos,
+    #     np.array(list(bytes_means.values())) // (1024 * 1024),
+    #     yerr=np.array(list(bytes_stdevs.values())) // (1024 * 1024),
+    #     align="center",
+    # )
+    # plt.ylabel("Total data shared in MBs")
+    # plt.xlabel("Fraction of Model Shared")
+    # plt.xticks(x_pos, list(bytes_means.keys()))
+    # plt.savefig(os.path.join(path, "data_shared.png"), dpi=300)
 
     # Plot stacked_bytes
-    plt.figure(5)
-    plt.title("Data Shared per Neighbor")
-    x_pos = np.arange(len(bytes_means.keys()))
-    plt.bar(
-        x_pos,
-        np.array(list(data_means.values())) // (1024 * 1024),
-        yerr=np.array(list(data_stdevs.values())) // (1024 * 1024),
-        align="center",
-        label="Parameters",
-    )
-    plt.bar(
-        x_pos,
-        np.array(list(meta_means.values())) // (1024 * 1024),
-        bottom=np.array(list(data_means.values())) // (1024 * 1024),
-        yerr=np.array(list(meta_stdevs.values())) // (1024 * 1024),
-        align="center",
-        label="Metadata",
-    )
-    plt.ylabel("Data shared in MBs")
-    plt.xlabel("Fraction of Model Shared")
-    plt.xticks(x_pos, list(meta_means.keys()))
-    plt.savefig(os.path.join(path, "parameters_metadata.png"), dpi=300)
+    # plt.figure(5)
+    # plt.title("Data Shared per Neighbor")
+    # x_pos = np.arange(len(bytes_means.keys()))
+    # plt.bar(
+    #     x_pos,
+    #     np.array(list(data_means.values())) // (1024 * 1024),
+    #     yerr=np.array(list(data_stdevs.values())) // (1024 * 1024),
+    #     align="center",
+    #     label="Parameters",
+    # )
+    # plt.bar(
+    #     x_pos,
+    #     np.array(list(meta_means.values())) // (1024 * 1024),
+    #     bottom=np.array(list(data_means.values())) // (1024 * 1024),
+    #     yerr=np.array(list(meta_stdevs.values())) // (1024 * 1024),
+    #     align="center",
+    #     label="Metadata",
+    # )
+    # plt.ylabel("Data shared in MBs")
+    # plt.xlabel("Fraction of Model Shared")
+    # plt.xticks(x_pos, list(meta_means.keys()))
+    # plt.savefig(os.path.join(path, "parameters_metadata.png"), dpi=300)
 
 
 def plot_parameters(path):

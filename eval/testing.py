@@ -9,6 +9,7 @@ from decentralizepy import utils
 from decentralizepy.graphs.Graph import Graph
 from decentralizepy.mappings.Linear import Linear
 from decentralizepy.node.DPSGDNode import DPSGDNode
+from decentralizepy.node.OurGossipNode import OurGossipNode
 from decentralizepy.node.GossipNode import GossipNode
 
 

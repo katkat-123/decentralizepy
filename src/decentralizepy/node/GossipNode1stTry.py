@@ -3,6 +3,10 @@ import json
 import logging
 import math
 import os
+import time
+import random
+import threading
+from threading import Thread, Lock
 from collections import deque
 
 import torch
@@ -14,11 +18,12 @@ from decentralizepy.mappings.Mapping import Mapping
 from decentralizepy.node.Node import Node
 
 
-class DPSGDNode(Node):
+class GossipNode(Node):
     """
-    This class defines the node for DPSGD
+    This class defines the node for gossip learning algorithm
 
     """
+
 
     def save_plot(self, l, label, title, xlabel, filename):
         """
@@ -49,32 +54,120 @@ class DPSGDNode(Node):
     def get_neighbors(self, node=None):
         return self.my_neighbors
 
-    def receive_DPSGD(self):
-        return self.receive_channel("DPSGD")
+    def receive_GOSSIP(self):
+        return self.receive_channel("GOSSIP", False)
+
+    # def send_gossip_to_peers(self):
+        
+    #     #delta_g: period for sending model to neighbor, in sec, maybe parameter
+    #     msg_num=1   #to how many nodes will i send my model
+
+
+    #     while(True):
+            
+    #         time.sleep(self.delta_g) #in seconds
+
+            
+    #         #to vazw mesa sth loopa gia na elegxei kathe fora an einai zwntanoi oi geitones tou - den kserw an vgazei poli noima aftos o kwdikas
+    #         new_neighbors = self.get_neighbors() 
+    #         self.my_neighbors = new_neighbors
+    #         self.connect_neighbors()
+    #         logging.debug("Connected to all neighbors")
+
+    #         #send to peers
+    #         neighbor_list = list(self.my_neighbors)
+    #         peer_to_send = random.choice(neighbor_list)
+
+
+    #         to_send = self.sharing.get_data_to_send(degree=len(self.my_neighbors))  #epistrefei ena dictionary me pedia: parameters, degree, iteration + prepei na valw kai to age
+    #         to_send["CHANNEL"] = "GOSSIP"
+    #         to_send["age"] = self.model.age_t
+
+    #         self.communication.send(peer_to_send, to_send)
+        
+    #         # self.iteration = iteration
+    #         # self.trainer.train(self.dataset)
+    #         logging.info("KAT-thread: Sent to neighbor in thread")
+
+    #         if self.stopper.is_set():
+    #             logging.info("KAT-thread: Teleiwsa")
+    #             break
+    #         #iterations ended - should stop sending - maybe the main function that creates the thread can terminate it
+            
+    #     #after signal is set, before terminating the thread should i do sth (save, safe exit etc.)
+    #     logging.info("KAT-thread: Out of loop")
+
+
+    def receive_and_merge(self):
+
+        while(True):
+
+            if self.stopper.is_set():
+                logging.debug("KAT-thread: Teleiwsa")
+                break
+
+            try:
+                sender, data = self.receive_GOSSIP() #receive from neighbor
+            except TypeError:   #epestrepse none=xtipise timeout, ara ksanampes sti loopa
+                continue
+
+            logging.debug(
+                    "Received Model from {} of iteration {}".format(    #to iteration exei noima? afou einai gossip
+                        sender, data["iteration"]
+                    )
+            )            
+
+            
+            self.msg_deque.append(data)
+
+            self.model_lock.acquire()
+            self.sharing._averaging_gossip(self.msg_deque)
+            self.model_lock.release()
+
+            
+        logging.debug("KAT-thread: Out of loop")
+
 
     def run(self):
         """
         Start the decentralized learning
 
         """
+
+
         self.testset = self.dataset.get_testset()
         rounds_to_test = self.test_after
         rounds_to_train_evaluate = self.train_evaluate_after
         global_epoch = 1
         change = 1
 
-        for iteration in range(self.iterations):
+        self.model_lock = Lock()
+
+
+        #create thread for sending periodically the local model to neighbors
+        self.stopper = threading.Event()
+        receiver_thread = threading.Thread(target=self.receive_and_merge)
+        logging.debug("KAT: Created thread")
+        receiver_thread.start()
+        
+        t_end = time.time() + 60 * self.training_time
+
+        iteration = 0
+
+        while(True):
+        # for iteration in range(self.iterations):
+
             logging.info("Starting training iteration: %d", iteration)
             rounds_to_train_evaluate -= 1
             rounds_to_test -= 1
 
             self.iteration = iteration
-            self.trainer.train(self.dataset)    #kanei update to topiko modelo me ena tixaio batch topikwn dedomenwn me vasi kapoion optimizer
 
-            logging.debug(
-                    "KAT: size of trainset is {}".format(
-                        len(self.dataset.trainset)
-                    ))
+            self.model_lock.acquire()
+            self.trainer.train(self.dataset)    #kanei update to topiko modelo me ena tixaio batch topikwn dedomenwn me vasi kapoion optimizer
+            self.model_lock.release()
+
+            time.sleep(self.delta_g) #in seconds
 
             new_neighbors = self.get_neighbors()    #from the graph module, get who my neighbors are
 
@@ -92,33 +185,17 @@ class DPSGDNode(Node):
             self.connect_neighbors()
             logging.debug("Connected to all neighbors")
 
-            to_send = self.sharing.get_data_to_send(degree=len(self.my_neighbors))  #epistrefei ena dictionary me pedia: parameters, degree, iteration
-            to_send["CHANNEL"] = "DPSGD"
+            neighbors_list = list(self.my_neighbors)
+            peer_to_send = random.choice(neighbors_list)
 
-            for neighbor in self.my_neighbors:  #send to my neighbors my local model
-                self.communication.send(neighbor, to_send)
+            to_send = self.sharing.get_data_to_send(degree=len(self.my_neighbors))  #epistrefei ena dictionary me pedia: parameters, degree, iteration + prepei na valw kai to age
+            to_send["CHANNEL"] = "GOSSIP"
+            to_send["age"] = self.model.age_t
 
-            while not self.received_from_all(): #waiting for all my neighbors to respond
-                sender, data = self.receive_DPSGD()
-                logging.debug(
-                    "Received Model from {} of iteration {}".format(
-                        sender, data["iteration"]
-                    )
-                )
-                if sender not in self.peer_deques:  #peer_deques-> dict 
-                    self.peer_deques[sender] = deque()  #ftiaxnei pia diplh oura gia afton ton sender
+            self.communication.send(peer_to_send, to_send)
 
-                if data["iteration"] == self.iteration: #save what i got from each neighbor separetely
-                    self.peer_deques[sender].appendleft(data)   #and einai sto iteration mou, vazw to minima mprosta sto queue
-                else:
-                    self.peer_deques[sender].append(data)   #alliws, to kanw append sta deksia
-
-            averaging_deque = dict()
-            for neighbor in self.my_neighbors:
-                averaging_deque[neighbor] = self.peer_deques[neighbor]  #move each neighbor model to another deque
-
-            self.sharing._averaging(averaging_deque)    #average the models of my neighbors with mine
-
+            
+            
             if self.reset_optimizer:    #kanei reset ton optimizer, an mas to leei to config
                 self.optimizer = self.optimizer_class(
                     self.model.parameters(), **self.optimizer_params
@@ -141,7 +218,7 @@ class DPSGDNode(Node):
                     "total_data_per_n": {},
                 }
 
-            results_dict["total_bytes"][iteration + 1] = self.communication.total_bytes #save how many bytes sent/received?
+            results_dict["total_bytes"][iteration + 1] = self.communication.total_bytes
 
             if hasattr(self.communication, "total_meta"):   #saving more metadata?
                 results_dict["total_meta"][
@@ -181,6 +258,18 @@ class DPSGDNode(Node):
                 os.path.join(self.log_dir, "{}_results.json".format(self.rank)), "w"
             ) as of:
                 json.dump(results_dict, of)
+
+            iteration += 1
+
+            if time.time() >= t_end:    #stop the training after a specific amount of time
+                break
+
+
+        #terminate the sending thread
+        logging.info("KAT: time passed - waiting for thread to join")
+        self.stopper.set()
+        receiver_thread.join() 
+    
         if self.model.shared_parameters_counter is not None:
             logging.info("Saving the shared parameter counts")
             with open(
@@ -190,6 +279,7 @@ class DPSGDNode(Node):
                 "w",
             ) as of:
                 json.dump(self.model.shared_parameters_counter.numpy().tolist(), of)
+        
         self.disconnect_neighbors() #meta ta iterations, aposindesi apo geitones
         logging.info("Storing final weight")
         self.model.dump_weights(self.weights_store_dir, self.uid, iteration)    #apothikefsh twn weights sto modelo
@@ -283,6 +373,8 @@ class DPSGDNode(Node):
         test_after=5,
         train_evaluate_after=1,
         reset_optimizer=1,
+        delta_g=1, #kat: new add
+        training_time=5, #in minutes, kat: new add
         *args
     ):
         """
@@ -345,29 +437,15 @@ class DPSGDNode(Node):
         self.my_neighbors = self.graph.neighbors(self.uid)
 
         self.init_sharing(config["SHARING"])
-        self.peer_deques = dict()
+        self.msg_deque = deque()
         self.connect_neighbors()
 
-    def received_from_all(self):
-        """
-        Check if all neighbors have sent the current iteration
+        self.delta_g = delta_g  #kat
+        self.training_time = training_time #kat
+        self.model.age_t = 0    #kat: tairiazei pio polu na einai apothikevmeno sto model
 
-        Returns
-        -------
-        bool
-            True if required data has been received, False otherwise
 
-        """
-        for k in self.my_neighbors:
-            if (
-                (k not in self.peer_deques)
-                or len(self.peer_deques[k]) == 0
-                or self.peer_deques[k][0]["iteration"] != self.iteration
-            ):
-                return False
-        return True
-
-    def __init__(
+    def __init__(   #isws prepei na pernei kai alles parametrous
         self,
         rank: int,
         machine_id: int,
@@ -381,6 +459,8 @@ class DPSGDNode(Node):
         test_after=5,
         train_evaluate_after=1,
         reset_optimizer=1,
+        delta_g=1, #kat: new add
+        training_time=5, #in minutes, kat: new add
         *args
     ):
         """
@@ -448,6 +528,8 @@ class DPSGDNode(Node):
             test_after,
             train_evaluate_after,
             reset_optimizer,
+            delta_g,
+            training_time,
             *args
         )
         logging.info(

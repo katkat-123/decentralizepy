@@ -62,40 +62,31 @@ class GossipNode(Node):
         
         while(True):
             
-            logging.debug("KAT-thread : in send gossip before waiting")
+            time.sleep(self.delta_g)
 
-            time.sleep(self.delta_g) #in seconds
-
-
-            #to vazw mesa sth loopa gia na elegxei kathe fora an einai zwntanoi oi geitones tou - den kserw an vgazei poli noima aftos o kwdikas
             new_neighbors = self.get_neighbors() 
             self.my_neighbors = new_neighbors
             self.connect_neighbors()
-            logging.debug("KAT-thread : connected to all neighbors")
+            logging.debug("gossip-thread : connected to all neighbors")
 
-            #send to peers
+            #send to random peer
             neighbor_list = list(self.my_neighbors)
             peer_to_send = random.choice(neighbor_list)
 
-            self.model_lock.acquire()
-            to_send = self.sharing.get_data_to_send(degree=len(self.my_neighbors))  #epistrefei ena dictionary me pedia: parameters, degree, iteration + prepei na valw kai to age
-            self.model_lock.release()
+            with self.model_lock:
+                to_send = self.sharing.get_data_to_send(degree=len(self.my_neighbors))
+                to_send["age"] = self.model.age_t
 
             to_send["CHANNEL"] = "GOSSIP"
-            to_send["age"] = self.model.age_t
-
 
             self.communication.send(peer_to_send, to_send)
         
-            logging.info("KAT-thread: Sent to neighbor in thread with age {}".format(to_send["age"]))
-
             if self.stopper.is_set():
-                logging.info("KAT-thread: Teleiwsa")
+                logging.debug("gossip-thread: Finished")
                 break
 
-            
-        #after signal is set, before terminating the thread should i do sth (save, safe exit etc.)
-        logging.info("KAT-thread: Out of loop")
+                 
+        logging.debug("gossip-thread: Out of loop")
 
 
     def run(self):
@@ -115,7 +106,7 @@ class GossipNode(Node):
         #create thread for sending periodically the local model to neighbors
         self.stopper = threading.Event()
         sending_thread = threading.Thread(target=self.send_gossip_to_peers)
-        logging.debug("KAT: Created thread")
+        logging.debug("Gossip thread created")
         sending_thread.start()
         
         self.model_lock = Lock()
@@ -130,45 +121,56 @@ class GossipNode(Node):
 
         while(True):
 
-            if time.time() >= t_end:    #stop the training after a specific amount of time
+            if time.time() >= t_end:    #stop the training after a specific period of time
                 break
 
             try:
                 sender, data = self.receive_GOSSIP() #receive from neighbor
-            except TypeError:   #epestrepse none=xtipise timeout, ara ksanampes sti loopa
+            except TypeError:   #in case of timeout
                 continue
 
             logging.debug(
-                    "Received Model from {} of iteration {}".format(    #to iteration exei noima? afou einai gossip
+                    "Received Model from {} of iteration {}".format(
                         sender, data["iteration"]
                     )
             )            
 
-            # self.msg_deque.append(data)
 
             rounds_to_train_evaluate -= 1
             rounds_to_test -= 1
             self.iteration = iteration
 
-            
-            self.model_lock.acquire()
+            should_aggregate = True
+
+            if sender in self.received_history.keys():
+                if data["age"]>self.received_history[sender]:
+                    self.received_history[sender]=data["age"]
+                else:
+                    should_aggregate = False
+                    print("no aggregation from ", sender, " with age ", data["age"])
+            else:
+                self.received_history[sender] = data["age"]
+
+            with self.model_lock:
             # start = time.time()
-            self.sharing._averaging_gossip(data)  
-            self.trainer.train(self.dataset)
+
+
+                if should_aggregate:
+                    self.sharing._averaging_gossip(data)  
+                self.trainer.train(self.dataset)
             # end = time.time()
             # tr_time += end-start
             # max_time = (end-start) if (end-start)>max_time else max_time
-            self.model_lock.release()
 
 
 
-            if self.reset_optimizer:    #kanei reset ton optimizer, an mas to leei to config
+            if self.reset_optimizer: 
                 self.optimizer = self.optimizer_class(
                     self.model.parameters(), **self.optimizer_params
                 )  # Reset optimizer state
                 self.trainer.reset_optimizer(self.optimizer)
 
-            if iteration:   #saving the metrics
+            if iteration:
                 with open(
                     os.path.join(self.log_dir, "{}_results.json".format(self.rank)),
                     "r",
@@ -186,7 +188,7 @@ class GossipNode(Node):
 
             results_dict["total_bytes"][iteration + 1] = self.communication.total_bytes
 
-            if hasattr(self.communication, "total_meta"):   #saving more metadata?
+            if hasattr(self.communication, "total_meta"):
                 results_dict["total_meta"][
                     iteration + 1
                 ] = self.communication.total_meta
@@ -199,7 +201,7 @@ class GossipNode(Node):
             if rounds_to_train_evaluate == 0:   #evaluating after fixed size of iterations
                 logging.info("Evaluating on train set.")
                 rounds_to_train_evaluate = self.train_evaluate_after * change
-                loss_after_sharing = self.trainer.eval_loss(self.dataset)   #trainer eval loss -> check
+                loss_after_sharing = self.trainer.eval_loss(self.dataset)
                 results_dict["train_loss"][iteration + 1] = loss_after_sharing
                 self.save_plot(
                     results_dict["train_loss"],
@@ -212,7 +214,7 @@ class GossipNode(Node):
             if self.dataset.__testing__ and rounds_to_test == 0:    #evaluating on test set
                 rounds_to_test = self.test_after * change
                 logging.info("Evaluating on test set.")
-                ta, tl = self.dataset.test(self.model, self.loss)   #to test ginetai sto module dataset
+                ta, tl = self.dataset.test(self.model, self.loss)
                 results_dict["test_acc"][iteration + 1] = ta
                 results_dict["test_loss"][iteration + 1] = tl
 
@@ -231,7 +233,7 @@ class GossipNode(Node):
 
             
         #terminate the sending thread
-        logging.info("KAT: time passed - waiting for thread to join")
+        logging.info("time passed - waiting for gossip thread to join")
         self.stopper.set()
         sending_thread.join() 
 
@@ -249,9 +251,9 @@ class GossipNode(Node):
             ) as of:
                 json.dump(self.model.shared_parameters_counter.numpy().tolist(), of)
         
-        self.disconnect_neighbors() #meta ta iterations, aposindesi apo geitones
+        self.disconnect_neighbors()
         logging.info("Storing final weight")
-        self.model.dump_weights(self.weights_store_dir, self.uid, self.iteration)    #apothikefsh twn weights sto modelo
+        self.model.dump_weights(self.weights_store_dir, self.uid, self.iteration)
         logging.info("All neighbors disconnected. Process complete!")
 
     def cache_fields(
@@ -342,8 +344,8 @@ class GossipNode(Node):
         test_after=5,
         train_evaluate_after=1,
         reset_optimizer=1,
-        delta_g=1, #kat: new add
-        training_time=5, #in minutes, kat: new add
+        delta_g=1, #in seconds
+        training_time=5, #in minutes
         *args
     ):
         """
@@ -413,6 +415,8 @@ class GossipNode(Node):
         self.training_time = training_time #kat
         self.model.age_t = 0    #kat: tairiazei pio polu na einai apothikevmeno sto model
 
+        self.received_history = dict()
+
 
     def __init__(   #isws prepei na pernei kai alles parametrous
         self,
@@ -428,8 +432,8 @@ class GossipNode(Node):
         test_after=5,
         train_evaluate_after=1,
         reset_optimizer=1,
-        delta_g=0.1, #kat: new add
-        training_time=5, #in minutes, kat: new add
+        delta_g=0.1, #in seconds
+        training_time=5, #in minutes
         *args
     ):
         """

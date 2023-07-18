@@ -6,7 +6,10 @@ import os
 import time
 import random
 import threading
+import csv
 from queue import Queue
+from datetime import datetime  
+
 
 
 import torch
@@ -141,6 +144,10 @@ class OurGossipNode(Node):
             #send
             self.communication.send(peer_to_send, to_send)
 
+            #store meta info
+            from datetime import datetime  
+
+            self.sending_log.append({"timestamp": datetime.fromtimestamp(datetime.now().timestamp()), "iteration": iteration, "from": self.uid, "to": peer_to_send, "age": self.model.age_t})
         
             if self.reset_optimizer: 
                 self.optimizer = self.optimizer_class(
@@ -226,6 +233,14 @@ class OurGossipNode(Node):
             ) as of:
                 json.dump(self.model.shared_parameters_counter.numpy().tolist(), of)
         
+        sending_log_header = ["timestamp", "iteration", "from", "to", "age"]
+       
+        with open(os.path.join(
+                    self.log_dir, "{}_sending_log.csv".format(self.rank)), 'w+') as file:
+            writer = csv.DictWriter(file, fieldnames=sending_log_header)
+            writer.writeheader()
+            writer.writerows(self.sending_log)
+
         self.disconnect_neighbors()
         logging.info("Storing final weight")
         self.model.dump_weights(self.weights_store_dir, self.uid, iteration)
@@ -385,6 +400,7 @@ class OurGossipNode(Node):
         self.msg_queue = Queue()
         self.connect_neighbors()
 
+        self.sending_log = []
         self.training_time = training_time #kat
         self.model.age_t = 0    #kat: tairiazei pio polu na einai apothikevmeno sto model
 

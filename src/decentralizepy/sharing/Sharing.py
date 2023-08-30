@@ -280,16 +280,16 @@ class Sharing:
                 )
 
                 max_age = sender_age if sender_age > max_age else max_age
+                ages_sum += sender_age
 
                 data = self.deserialized_model(data)
                 
-                ages_sum += sender_age
-
                 for key, value in data.items():
                     if key in total:
                         total[key] += value * sender_age
                     else:
                         total[key] = value * sender_age
+
 
             for key, value in self.model.state_dict().items():
                 if key in total:
@@ -349,7 +349,7 @@ class Sharing:
 
     def get_data_to_send(self, degree=None):
         self._pre_step()
-        data = self.serialized_model()  #ftiaxnei tous tensores se ena dictionary -> data["parameters"]={compressed data}
+        data = self.serialized_model()
         my_uid = self.mapping.get_uid(self.rank, self.machine_id)
         data["degree"] = degree if degree != None else len(self.graph.neighbors(my_uid))
         data["iteration"] = self.communication_round

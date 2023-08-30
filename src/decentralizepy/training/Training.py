@@ -118,13 +118,13 @@ class Training:
             Loss Value for the step
 
         """
-        self.model.zero_grad()  #set gradients of all model params to zero
+        self.model.zero_grad()
         output = self.model(data)
-        loss_val = self.loss(output, target) #loss function exei oristei sthn arxh, px cross entropy loss
-        loss_val.backward() #kanei backpropagation, upologizei ta gradients tou tensora
-        self.optimizer.step()   #optimizer px sgd, kanei update ta parameters vasi twn gradients
+        loss_val = self.loss(output, target)
+        loss_val.backward()
+        self.optimizer.step() 
 
-        self.model.age_t += self.batch_size #kat: den kserw an prepei na mpei edw, isws tha prepei na elegxw an einai gossip giati mono tote me endiaferei
+        self.model.age_t += self.batch_size
         
 
         return loss_val.item()
@@ -164,22 +164,20 @@ class Training:
             The training dataset. Should implement get_trainset(batch_size, shuffle)
 
         """
-        self.model.train()  #sets the model in training mode
+        self.model.train()
 
         if self.full_epochs:
             self.train_full(dataset)
         else:
             iter_loss = 0.0
             count = 0
-            trainset = dataset.get_trainset(self.batch_size, self.shuffle)  #breaks the dataset into batches
+            trainset = dataset.get_trainset(self.batch_size, self.shuffle)
             while count < self.rounds:
                 for data, target in trainset:
-                    iter_loss += self.trainstep(data, target)   #one training step, kainei update tis parametrous kai epistrefei to loss
+                    iter_loss += self.trainstep(data, target)
                     count += 1
                     logging.debug("Round: {} loss: {}".format(count, iter_loss / count))
                     if count >= self.rounds:
                         break
-        
-        logging.debug("KAT: in training age is {}".format(self.model.age_t))
-        
+                
 

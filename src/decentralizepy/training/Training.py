@@ -123,10 +123,7 @@ class Training:
         loss_val = self.loss(output, target)
         loss_val.backward()
         self.optimizer.step() 
-
-        self.model.age_t += self.batch_size
         
-
         return loss_val.item()
 
     def train_full(self, dataset):

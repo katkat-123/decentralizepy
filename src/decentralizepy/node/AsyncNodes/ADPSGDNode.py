@@ -3,27 +3,25 @@ import json
 import logging
 import math
 import os
-import time
 import random
+import time
 import threading
-from threading import Thread, Lock
-from collections import deque
 
 import torch
 from matplotlib import pyplot as plt
 
 from decentralizepy import utils
 from decentralizepy.graphs.Graph import Graph
+from decentralizepy.graphs.Bipartite import Bipartite
 from decentralizepy.mappings.Mapping import Mapping
 from decentralizepy.node.Node import Node
 
 
-class GossipNode(Node):
+class ADPSGDNode(Node):
     """
-    This class defines the node for gossip learning algorithm
+    This class defines the node for ADPSGD
 
     """
-
 
     def save_plot(self, l, label, title, xlabel, filename):
         """
@@ -54,69 +52,157 @@ class GossipNode(Node):
     def get_neighbors(self, node=None):
         return self.my_neighbors
 
-    def receive_GOSSIP(self):
-        return self.receive_channel("GOSSIP", False)
+    def receive_ADPSGD(self, blocking=True):
+        return self.receive_channel("ADPSGD", blocking)
 
 
-    def rec_merge_and_update(self):
-        
-        rounds_to_test = self.test_after
-        rounds_to_train_evaluate = self.train_evaluate_after
-        
-        iteration = 0
+    def active_communication(self):
 
         while(True):
             
-            if self.stopper.is_set():   #main thread finished
-                logging.debug("gossip-thread: Finished")
+            if self.stopper.is_set():
+                logging.info("active-thread: Teleiwsa")
                 break
 
+            new_neighbors = self.get_neighbors()
+            self.my_neighbors = new_neighbors
+            self.connect_neighbors()
+
+            #send to random peer
+            neighbor_list = list(self.my_neighbors)
+            peer_to_send = random.choice(neighbor_list)
+
+            with self.model_lock:
+                to_send = self.sharing.get_data_to_send(self.iteration, self.uid)
+
+            to_send["CHANNEL"] = "ADPSGD"
+            self.communication.send(peer_to_send, to_send)
+
+            #wait for his response
+            pending = True
+            while(pending):
+                try:
+                    sender, data = self.receive_ADPSGD(False) #receive from neighbor
+                    pending = False
+                except TypeError:   #epestrepse none=xtipise timeout, ara ksanampes sti loopa
+                    logging.debug("epatha timeout oso perimena")
+                    
+                    if self.stopper.is_set():   #main thread is terminating
+                        pending=False
+                    
+                    continue
+
+                if sender==peer_to_send:
+                    
+                    with self.model_lock:
+                        self.sharing._averaging_ADPSGD(data)
+
+                else:
+                    logging.debug("Should never be here.. Im {} and received from {}".format(self.uid, sender))
+
+            
+
+        logging.info("active-thread: out of loop")
+
+
+
+    def passive_communication(self):
+
+        while(True):
+
+            if self.stopper.is_set():
+                logging.info("passive-thread: Teleiwsa")
+                break
+
+            #wait for an active peer to send me a model
+            # sender, data = self.receive_ADPSGD() #receive from neighbor
             try:
-                sender, data = self.receive_GOSSIP()
-            except TypeError:   #in case of timeout
+                sender, data = self.receive_ADPSGD(False) #receive from neighbor
+            except TypeError:   #epestrepse none=xtipise timeout, ara ksanampes sti loopa
                 continue
 
-            logging.debug(
-                    "Received Model from {} of iteration {}".format(
-                        sender, data["iteration"]
-                    )
-            )            
+
+            logging.debug("passive thread: i received model from {}".format(sender))
 
 
+            #send him back my model
+            with self.model_lock:
+                to_send = self.sharing.get_data_to_send(degree=len(self.my_neighbors))
+
+            to_send["CHANNEL"] = "ADPSGD"
+            to_send["sender_uid"] = self.uid
+            self.communication.send(sender, to_send)
+
+            #average the two models
+            with self.model_lock:
+                self.sharing._averaging_ADPSGD(data)
+            
+            
+        logging.info("passive-thread: out of loop")
+
+    
+
+
+    def run(self):
+        """
+        Start the decentralized learning
+
+        """
+
+
+        self.testset = self.dataset.get_testset()
+        rounds_to_test = self.test_after
+        rounds_to_train_evaluate = self.train_evaluate_after
+        global_epoch = 1
+        change = 1
+
+
+        self.model_lock = threading.Lock()
+        self.stopper = threading.Event()
+        
+
+        if self.graph.is_passive(self.uid):
+            communication_thread = threading.Thread(target=self.passive_communication)
+        else:
+            communication_thread = threading.Thread(target=self.active_communication)
+        communication_thread.start()
+
+        
+    
+        t_end = time.time() + 60 * self.training_time
+
+        iteration = 0
+
+
+        while(True):
+
+            if time.time() >= t_end:    #stop the training after a specific amount of time
+                break
+
+                    
             rounds_to_train_evaluate -= 1
             rounds_to_test -= 1
             self.iteration = iteration
 
-            should_aggregate = True
-
-            if sender in self.received_history.keys():  #aggregate only if new model is received
-                if data["age"]>self.received_history[sender]:
-                    self.received_history[sender]=data["age"]
-                else:
-                    should_aggregate = False
-                    print("no aggregation from ", sender, " with age ", data["age"])
-            else:
-                self.received_history[sender] = data["age"]
-
             with self.model_lock:
-
-                if should_aggregate:
-                    self.sharing._averaging_gossip(data)  
-                    self.msg_aggr += 1
-                
                 self.trainer.train(self.dataset)
-            
 
 
 
-            if self.reset_optimizer: 
+            if self.reset_optimizer:    #kanei reset ton optimizer, an mas to leei to config
                 self.optimizer = self.optimizer_class(
                     self.model.parameters(), **self.optimizer_params
                 )  # Reset optimizer state
                 self.trainer.reset_optimizer(self.optimizer)
 
-            if iteration==0:
-               results_dict = {
+            if iteration:   #saving the metrics
+                with open(
+                    os.path.join(self.log_dir, "{}_results.json".format(self.rank)),
+                    "r",
+                ) as inf:
+                    results_dict = json.load(inf)
+            else:
+                results_dict = {
                     "train_loss": {},
                     "test_loss": {},
                     "test_acc": {},
@@ -127,7 +213,7 @@ class GossipNode(Node):
 
             results_dict["total_bytes"][iteration + 1] = self.communication.total_bytes
 
-            if hasattr(self.communication, "total_meta"):
+            if hasattr(self.communication, "total_meta"):   #saving more metadata?
                 results_dict["total_meta"][
                     iteration + 1
                 ] = self.communication.total_meta
@@ -137,47 +223,46 @@ class GossipNode(Node):
                 ] = self.communication.total_data
 
 
-            # if rounds_to_train_evaluate == 0:   #evaluating after fixed size of iterations
-            #     logging.info("Evaluating on train set.")
-            #     rounds_to_train_evaluate = self.train_evaluate_after * change
-            #     loss_after_sharing = self.trainer.eval_loss(self.dataset)
-            #     results_dict["train_loss"][iteration + 1] = loss_after_sharing
-            #     self.save_plot(
-            #         results_dict["train_loss"],
-            #         "train_loss",
-            #         "Training Loss",
-            #         "Communication Rounds",
-            #         os.path.join(self.log_dir, "{}_train_loss.png".format(self.rank)),
-            #     )
+            if rounds_to_train_evaluate == 0:   #evaluating after fixed size of iterations
+                logging.info("Evaluating on train set.")
+                rounds_to_train_evaluate = self.train_evaluate_after * change
+                loss_after_sharing = self.trainer.eval_loss(self.dataset)   #trainer eval loss -> check
+                results_dict["train_loss"][iteration + 1] = loss_after_sharing
+                self.save_plot(
+                    results_dict["train_loss"],
+                    "train_loss",
+                    "Training Loss",
+                    "Communication Rounds",
+                    os.path.join(self.log_dir, "{}_train_loss.png".format(self.rank)),
+                )
 
             if self.dataset.__testing__ and rounds_to_test == 0:    #evaluating on test set
-                rounds_to_test = self.test_after
-                logging.info("Evaluating on test set - saving model.")
+                rounds_to_test = self.test_after * change
+                logging.info("Evaluating on test set.")
+                ta, tl = self.dataset.test(self.model, self.loss)   #to test ginetai sto module dataset
+                results_dict["test_acc"][iteration + 1] = ta
+                results_dict["test_loss"][iteration + 1] = tl
 
-                # ta, tl = self.dataset.test(self.model, self.loss)
-                # results_dict["test_acc"][iteration + 1] = ta
-                # results_dict["test_loss"][iteration + 1] = tl
+                if global_epoch == 49:
+                    change *= 2
 
+                global_epoch += change
 
-                #save model to file - evaluate later
-                if not os.path.exists(os.path.join(self.log_dir, "models")):
-                    os.makedirs(os.path.join(self.log_dir, "models"))
-
-                torch.save(self.model.state_dict(), os.path.join(self.log_dir, "models/{}_model_{}_iter.pt".format(self.uid, iteration)))
-                self.msg_log["msg_sent"][iteration] = self.msg_sent
-                self.msg_log["msg_aggr"][iteration] = self.msg_aggr
+            with open(
+                os.path.join(self.log_dir, "{}_results.json".format(self.rank)), "w"
+            ) as of:
+                json.dump(results_dict, of)
 
 
             iteration += 1
-        
 
-        # logging.info("Evaluating on test set.")
-        # ta, tl = self.dataset.test(self.model, self.loss)
+            
+        #terminate the sending thread
+        logging.info("KAT: time passed - waiting for thread to join")
+        self.stopper.set()
+        communication_thread.join() 
 
-        # print("node ", self.uid, " with test acc ", ta)
-        # print("node ", self.uid, " with test loss ", tl)
-        # print("node ", self.uid, " with total iterations ", iteration)
-
+    
         if self.model.shared_parameters_counter is not None:
             logging.info("Saving the shared parameter counts")
             with open(
@@ -187,80 +272,12 @@ class GossipNode(Node):
                 "w",
             ) as of:
                 json.dump(self.model.shared_parameters_counter.numpy().tolist(), of)
-
-        with open(
-            os.path.join(self.log_dir, "{}_results.json".format(self.rank)), "w"
-        ) as of:
-            json.dump(results_dict, of)
-
-        with open(
-            os.path.join(self.log_dir, "{}_msg_log.json".format(self.uid)), "w+"
-        ) as of:
-            json.dump(self.msg_log, of)
-
-        logging.debug("gossip-thread: Out of loop")
-
-
-
-    def run(self):
-        """
-        Start the decentralized learning
-
-        """
-
-        self.testset = self.dataset.get_testset()
-
-        #create thread for sending periodically the local model to neighbors
-        self.stopper = threading.Event()
-        receiver_thread = threading.Thread(target=self.rec_merge_and_update)
-        logging.debug("Gossip thread created")
-        receiver_thread.start()
-
-        self.model_lock = Lock()
-
-    
-        t_end = time.time() + 60 * self.training_time
-
-        while(True):
-
-            if time.time() >= t_end:
-                break
-
-            time.sleep(self.delta_g)
-
-            new_neighbors = self.get_neighbors() 
-            self.my_neighbors = new_neighbors
-            self.connect_neighbors()
-            logging.debug("gossip-thread : connected to all neighbors")
-
-            #send to random peer
-            neighbor_list = list(self.my_neighbors)
-            peer_to_send = random.choice(neighbor_list)
-
-            if (peer_to_send in self.send_history.keys()) and self.send_history[peer_to_send] >= self.model.age_t: #only send if the model has not been sent before to this neighbor
-                continue
-
-            with self.model_lock:
-                to_send = self.sharing.get_data_to_send(degree=len(self.my_neighbors))
-                to_send["age"] = self.model.age_t
-                self.send_history[peer_to_send] = self.model.age_t
-
-            to_send["CHANNEL"] = "GOSSIP"
-
-            self.communication.send(peer_to_send, to_send)
-            self.msg_sent += 1
-
-            
-        #terminate the sending thread
-        logging.info("time passed - waiting for gossip thread to join")
-        self.stopper.set()
-        receiver_thread.join() 
-
         
-        self.disconnect_neighbors()
+        self.disconnect_neighbors() #meta ta iterations, aposindesi apo geitones
         logging.info("Storing final weight")
-        self.model.dump_weights(self.weights_store_dir, self.uid, self.iteration)
+        self.model.dump_weights(self.weights_store_dir, self.uid, self.iteration)    #apothikefsh twn weights sto modelo
         logging.info("All neighbors disconnected. Process complete!")
+
 
     def cache_fields(
         self,
@@ -350,8 +367,7 @@ class GossipNode(Node):
         test_after=5,
         train_evaluate_after=1,
         reset_optimizer=1,
-        delta_g=1, #in seconds
-        training_time=5, #in minutes
+        training_time=5, #in minutes, kat: new add
         *args
     ):
         """
@@ -383,10 +399,6 @@ class GossipNode(Node):
             Number of iterations after which the train loss is calculated
         reset_optimizer : int
             1 if optimizer should be reset every communication round, else 0
-        delta_g : float
-            Timeout in seconds
-        training_time   : int
-            Duration of training in minutes
         args : optional
             Other arguments
 
@@ -418,23 +430,31 @@ class GossipNode(Node):
         self.my_neighbors = self.graph.neighbors(self.uid)
 
         self.init_sharing(config["SHARING"])
-        self.msg_deque = deque()
+        self.peer_deques = dict()
         self.connect_neighbors()
 
-        self.delta_g = delta_g
         self.training_time = training_time
-        self.model.age_t = 0
 
-        self.received_history = dict()
-        self.send_history = dict()
+    def received_from_all(self):
+        """
+        Check if all neighbors have sent the current iteration
 
-        self.msg_sent = 0
-        self.msg_aggr = 0
+        Returns
+        -------
+        bool
+            True if required data has been received, False otherwise
 
-        self.msg_log = {"msg_sent": {}, "msg_aggr": {}}
+        """
+        for k in self.my_neighbors:
+            if (
+                (k not in self.peer_deques)
+                or len(self.peer_deques[k]) == 0
+                or self.peer_deques[k][0]["iteration"] != self.iteration
+            ):
+                return False
+        return True
 
-
-    def __init__(   #isws prepei na pernei kai alles parametrous
+    def __init__(
         self,
         rank: int,
         machine_id: int,
@@ -448,8 +468,7 @@ class GossipNode(Node):
         test_after=5,
         train_evaluate_after=1,
         reset_optimizer=1,
-        delta_g=0.1, #in seconds
-        training_time=5, #in minutes
+        training_time=5, #in minutes, kat: new add
         *args
     ):
         """
@@ -493,10 +512,6 @@ class GossipNode(Node):
             Number of iterations after which the train loss is calculated
         reset_optimizer : int
             1 if optimizer should be reset every communication round, else 0
-        delta_g : float
-            Timeout in seconds
-        training_time   : int
-            Duration of training in minutes
         args : optional
             Other arguments
 
@@ -521,11 +536,11 @@ class GossipNode(Node):
             test_after,
             train_evaluate_after,
             reset_optimizer,
-            delta_g,
             training_time,
             *args
         )
         logging.info(
             "Each proc uses %d threads out of %d.", self.threads_per_proc, total_threads
         )
+
         self.run()

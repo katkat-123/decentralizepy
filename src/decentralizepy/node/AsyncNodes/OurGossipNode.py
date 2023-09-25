@@ -3,26 +3,29 @@ import json
 import logging
 import math
 import os
-import random
 import time
+import random
 import threading
-from threading import Thread, Lock
+import csv
+from queue import Queue
+from datetime import datetime
+
 
 import torch
 from matplotlib import pyplot as plt
 
 from decentralizepy import utils
 from decentralizepy.graphs.Graph import Graph
-from decentralizepy.graphs.Bipartite import Bipartite
 from decentralizepy.mappings.Mapping import Mapping
 from decentralizepy.node.Node import Node
 
 
-class ADPSGDNode(Node):
+class OurGossipNode(Node):
     """
-    This class defines the node for ADPSGD
+    This class defines the node for our version of the gossip learning algorithm
 
     """
+
 
     def save_plot(self, l, label, title, xlabel, filename):
         """
@@ -53,156 +56,115 @@ class ADPSGDNode(Node):
     def get_neighbors(self, node=None):
         return self.my_neighbors
 
-    def receive_ADPSGD(self, blocking=True):
-        return self.receive_channel("ADPSGD", blocking)
+    def receive_GOSSIP(self):
+        return self.receive_channel("GOSSIP", False)
 
+    def receive_and_append(self):
+        """
+        Function that runs in parallel with training (main thread).
+        Receives models from neighbors and appends them to a queue.
 
-    def active_communication(self):
-
-        while(True):
-            
-            if self.stopper.is_set():
-                logging.info("active-thread: Teleiwsa")
-                break
-
-            new_neighbors = self.get_neighbors()
-            self.my_neighbors = new_neighbors
-            self.connect_neighbors()
-
-            #send to random peer
-            neighbor_list = list(self.my_neighbors)
-            peer_to_send = random.choice(neighbor_list)
-
-            with self.model_lock:
-                to_send = self.sharing.get_data_to_send(degree=len(self.my_neighbors))
-
-            to_send["CHANNEL"] = "ADPSGD"
-            to_send["sender_uid"] = self.uid
-            self.communication.send(peer_to_send, to_send)
-
-            #wait for his response
-            pending = True
-            while(pending):
-                try:
-                    sender, data = self.receive_ADPSGD(False) #receive from neighbor
-                    pending = False
-                except TypeError:   #epestrepse none=xtipise timeout, ara ksanampes sti loopa
-                    logging.debug("epatha timeout oso perimena")
-                    
-                    if self.stopper.is_set():   #main thread is terminating
-                        pending=False
-                    
-                    continue
-
-                if sender==peer_to_send:
-                    
-                    with self.model_lock:
-                        self.sharing._averaging_ADPSGD(data)
-
-                else:
-                    logging.debug("Should never be here.. Im {} and received from {}".format(self.uid, sender))
-
-            
-
-        logging.info("active-thread: out of loop")
-
-
-
-    def passive_communication(self):
+        """
 
         while(True):
 
-            if self.stopper.is_set():
-                logging.info("passive-thread: Teleiwsa")
+            if self.stopper.is_set():    #main thread finished training
+                logging.debug("receiver-thread: out of loop")
                 break
 
-            #wait for an active peer to send me a model
-            # sender, data = self.receive_ADPSGD() #receive from neighbor
             try:
-                sender, data = self.receive_ADPSGD(False) #receive from neighbor
-            except TypeError:   #epestrepse none=xtipise timeout, ara ksanampes sti loopa
+                sender, data = self.receive_GOSSIP() 
+            except TypeError:   #in case of timeout
                 continue
 
+            logging.debug(
+                    "Received Model from {} of iteration {}".format(
+                        sender, data["iteration"]
+                    )
+            )            
 
-            logging.debug("passive thread: i received model from {}".format(sender))
+            self.msg_queue.put(data)
 
-
-            #send him back my model
-            with self.model_lock:
-                to_send = self.sharing.get_data_to_send(degree=len(self.my_neighbors))
-
-            to_send["CHANNEL"] = "ADPSGD"
-            to_send["sender_uid"] = self.uid
-            self.communication.send(sender, to_send)
-
-            #average the two models
-            with self.model_lock:
-                self.sharing._averaging_ADPSGD(data)
             
-            
-           
-
-
-        logging.info("passive-thread: out of loop")
-
-    
+        logging.debug("receiver-thread: finished")
 
 
     def run(self):
         """
-        Start the decentralized learning
+        Runs the training loop.
 
         """
-
 
         self.testset = self.dataset.get_testset()
         rounds_to_test = self.test_after
         rounds_to_train_evaluate = self.train_evaluate_after
-        global_epoch = 1
-        change = 1
 
 
-        self.model_lock = Lock()
         self.stopper = threading.Event()
         
-
-        is_passive = True if self.graph.is_passive(self.uid) else False
-        if is_passive:
-            communication_thread = Thread(target=self.passive_communication)
-        else:
-            communication_thread = Thread(target=self.active_communication)
-
-        communication_thread.start()
-
+        #create thread for receiving neighbors' models
+        receiver_thread = threading.Thread(target=self.receive_and_append)
+        logging.debug("Receiver thread created")
+        receiver_thread.start()
         
-    
         t_end = time.time() + 60 * self.training_time
 
         iteration = 0
 
 
         while(True):
-
-            if time.time() >= t_end:    #stop the training after a specific amount of time
+            
+            if time.time() >= t_end:    #stop the training after training_time minutes
                 break
-
-                    
+            
+            logging.info("Starting training iteration: %d", iteration)
             rounds_to_train_evaluate -= 1
             rounds_to_test -= 1
             self.iteration = iteration
 
-            with self.model_lock:
-                self.trainer.train(self.dataset)
+
+            #train
+            self.trainer.train(self.dataset)
+            
+            #update age
+            if(not self.trainer.full_epochs):
+                self.age_t += self.trainer.rounds * self.trainer.batch_size
+            else:
+                #correct only for CIFAR10
+                self.age_t += self.trainer.rounds * (self.dataset.sizes[self.dataset.dataset_id]*50000)
+
+            #aggregate
+            new_age, no_of_aggr_msgs = self.sharing._averaging_gossip_queue(self.msg_queue, self.age_t)
+            self.age_t = new_age
+            self.msg_aggr += no_of_aggr_msgs
 
 
+            new_neighbors = self.get_neighbors()
+            self.my_neighbors = new_neighbors
+            self.connect_neighbors()
+            logging.debug("Connected to all neighbors")
 
-            if self.reset_optimizer:    #kanei reset ton optimizer, an mas to leei to config
+            neighbors_list = list(self.my_neighbors)
+            peer_to_send = random.choice(neighbors_list)
+
+            to_send = self.sharing.get_data_to_send(self.iteration, self.age_t)
+            to_send["CHANNEL"] = "GOSSIP"
+
+            #send
+            self.communication.send(peer_to_send, to_send)
+            self.msg_sent += 1
+        
+            
+            #store meta info
+            self.sending_log.append({"timestamp": datetime.fromtimestamp(datetime.now().timestamp()), "iteration": iteration, "from": self.uid, "to": peer_to_send, "age": self.age_t})
+        
+            if self.reset_optimizer: 
                 self.optimizer = self.optimizer_class(
                     self.model.parameters(), **self.optimizer_params
-                )  # Reset optimizer state
+                ) 
                 self.trainer.reset_optimizer(self.optimizer)
 
-            if iteration:   #saving the metrics
+            if iteration:
                 with open(
                     os.path.join(self.log_dir, "{}_results.json".format(self.rank)),
                     "r",
@@ -216,11 +178,14 @@ class ADPSGDNode(Node):
                     "total_bytes": {},
                     "total_meta": {},
                     "total_data_per_n": {},
+                    "aggregated_msgs": {}
                 }
 
-            results_dict["total_bytes"][iteration + 1] = self.communication.total_bytes
+            results_dict["total_bytes"][iteration + 1] = self.communication.total_bytes            
+            results_dict["aggregated_msgs"][iteration + 1] = no_of_aggr_msgs
 
-            if hasattr(self.communication, "total_meta"):   #saving more metadata?
+
+            if hasattr(self.communication, "total_meta"):
                 results_dict["total_meta"][
                     iteration + 1
                 ] = self.communication.total_meta
@@ -230,11 +195,13 @@ class ADPSGDNode(Node):
                 ] = self.communication.total_data
 
 
-            if rounds_to_train_evaluate == 0:   #evaluating after fixed size of iterations
+            if rounds_to_train_evaluate == 0 and self.eval_on_train:
+
                 logging.info("Evaluating on train set.")
-                rounds_to_train_evaluate = self.train_evaluate_after * change
-                loss_after_sharing = self.trainer.eval_loss(self.dataset)   #trainer eval loss -> check
+                rounds_to_train_evaluate = self.train_evaluate_after
+                loss_after_sharing = self.trainer.eval_loss(self.dataset)
                 results_dict["train_loss"][iteration + 1] = loss_after_sharing
+
                 self.save_plot(
                     results_dict["train_loss"],
                     "train_loss",
@@ -243,32 +210,39 @@ class ADPSGDNode(Node):
                     os.path.join(self.log_dir, "{}_train_loss.png".format(self.rank)),
                 )
 
-            if self.dataset.__testing__ and rounds_to_test == 0:    #evaluating on test set
-                rounds_to_test = self.test_after * change
-                logging.info("Evaluating on test set.")
-                ta, tl = self.dataset.test(self.model, self.loss)   #to test ginetai sto module dataset
-                results_dict["test_acc"][iteration + 1] = ta
-                results_dict["test_loss"][iteration + 1] = tl
 
-                if global_epoch == 49:
-                    change *= 2
+            if self.dataset.__testing__ and rounds_to_test == 0:
+                rounds_to_test = self.test_after
 
-                global_epoch += change
+                if self.save_not_test:
+                    
+                    logging.info("Saving model.")
+                    if not os.path.exists(os.path.join(self.log_dir, "models")):
+                        os.makedirs(os.path.join(self.log_dir, "models"))
+
+                    torch.save(self.model.state_dict(), os.path.join(self.log_dir, "models/{}_model_{}_iter.pt".format(self.uid, iteration)))
+                    self.msg_stats["msg_sent"][iteration] = self.msg_sent
+                    self.msg_stats["msg_aggr"][iteration] = self.msg_aggr
+
+                else:
+                    
+                    logging.info("Evaluating on test set.")
+                    ta, tl = self.dataset.test(self.model, self.loss)  
+                    results_dict["test_acc"][iteration + 1] = ta
+                    results_dict["test_loss"][iteration + 1] = tl
+                
 
             with open(
                 os.path.join(self.log_dir, "{}_results.json".format(self.rank)), "w"
             ) as of:
                 json.dump(results_dict, of)
 
-
             iteration += 1
 
             
-        #terminate the sending thread
-        logging.info("KAT: time passed - waiting for thread to join")
+        logging.info("time passed - waiting for receiver thread to join")
         self.stopper.set()
-        communication_thread.join() 
-
+        receiver_thread.join() 
     
         if self.model.shared_parameters_counter is not None:
             logging.info("Saving the shared parameter counts")
@@ -280,9 +254,24 @@ class ADPSGDNode(Node):
             ) as of:
                 json.dump(self.model.shared_parameters_counter.numpy().tolist(), of)
         
-        self.disconnect_neighbors() #meta ta iterations, aposindesi apo geitones
+
+        sending_log_header = ["timestamp", "iteration", "from", "to", "age"]
+        with open(os.path.join(self.log_dir, "{}_sending_log.csv".format(self.rank)), 'w+') as file:
+            writer = csv.DictWriter(file, fieldnames=sending_log_header)
+            writer.writeheader()
+            writer.writerows(self.sending_log)
+
+
+        with open(
+                os.path.join(self.log_dir, "{}_msg_stats.json".format(self.uid)), "w+"
+            ) as of:
+                json.dump(self.msg_stats, of)
+
+
+        logging.info("Training complete. Disconnecting neighbors.")
+        self.disconnect_neighbors()
         logging.info("Storing final weight")
-        self.model.dump_weights(self.weights_store_dir, self.uid, self.iteration)    #apothikefsh twn weights sto modelo
+        self.model.dump_weights(self.weights_store_dir, self.uid, iteration)
         logging.info("All neighbors disconnected. Process complete!")
 
 
@@ -374,7 +363,9 @@ class ADPSGDNode(Node):
         test_after=5,
         train_evaluate_after=1,
         reset_optimizer=1,
-        training_time=5, #in minutes, kat: new add
+        training_time=5, #in minutes
+        eval_on_train=False,
+        save_not_test=True,
         *args
     ):
         """
@@ -401,11 +392,18 @@ class ADPSGDNode(Node):
         log_level : logging.Level
             One of DEBUG, INFO, WARNING, ERROR, CRITICAL
         test_after : int
-            Number of iterations after which the test loss and accuracy arecalculated
+            Number of iterations after which the test loss and accuracy are calculated
         train_evaluate_after : int
             Number of iterations after which the train loss is calculated
         reset_optimizer : int
             1 if optimizer should be reset every communication round, else 0
+        training_time : int
+            Duration of training in minutes 
+        eval_on_train : bool
+            True if the model should be evaluated on the train set
+        save_not_test : bool
+            True if the model should be saved each test_after rounds
+            False if the model should be evaluated on the test set each test_after rounds
         args : optional
             Other arguments
 
@@ -437,29 +435,19 @@ class ADPSGDNode(Node):
         self.my_neighbors = self.graph.neighbors(self.uid)
 
         self.init_sharing(config["SHARING"])
-        self.peer_deques = dict()
+        self.msg_queue = Queue()
         self.connect_neighbors()
 
-        self.training_time = training_time
+        self.sending_log = []
+        self.training_time = training_time 
+        self.age_t = 0
+        self.msg_sent = 0
+        self.msg_aggr = 0
 
-    def received_from_all(self):
-        """
-        Check if all neighbors have sent the current iteration
+        self.msg_stats = {"msg_sent": {}, "msg_aggr": {}}
 
-        Returns
-        -------
-        bool
-            True if required data has been received, False otherwise
-
-        """
-        for k in self.my_neighbors:
-            if (
-                (k not in self.peer_deques)
-                or len(self.peer_deques[k]) == 0
-                or self.peer_deques[k][0]["iteration"] != self.iteration
-            ):
-                return False
-        return True
+        self.eval_on_train = eval_on_train
+        self.save_not_test = save_not_test
 
     def __init__(
         self,
@@ -475,7 +463,9 @@ class ADPSGDNode(Node):
         test_after=5,
         train_evaluate_after=1,
         reset_optimizer=1,
-        training_time=5, #in minutes, kat: new add
+        training_time=5, #in minutes
+        eval_on_train=False,
+        save_not_test=True,
         *args
     ):
         """
@@ -519,6 +509,13 @@ class ADPSGDNode(Node):
             Number of iterations after which the train loss is calculated
         reset_optimizer : int
             1 if optimizer should be reset every communication round, else 0
+        training_time : int
+            Duration of training in minutes 
+        eval_on_train : bool
+            True if the model should be evaluated on the train set
+        save_not_test : bool
+            True if the model should be saved each test_after rounds
+            False if the model should be evaluated on the test set each test_after rounds
         args : optional
             Other arguments
 
@@ -544,10 +541,11 @@ class ADPSGDNode(Node):
             train_evaluate_after,
             reset_optimizer,
             training_time,
+            eval_on_train,
+            save_not_test,
             *args
         )
         logging.info(
             "Each proc uses %d threads out of %d.", self.threads_per_proc, total_threads
         )
-
         self.run()

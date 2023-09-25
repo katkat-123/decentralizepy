@@ -6,6 +6,7 @@ from decentralizepy.graphs.Graph import Graph
 class Bipartite(Graph):
     """
     The class for generating a Bipartite Graph Topology with passive (even rank) and active (odd rank) nodes.
+    Used for ADPSGD.
 
     """
 
@@ -19,7 +20,7 @@ class Bipartite(Graph):
             total number of nodes in the graph
         
         exponential : bool
-            whether the graph is exponential or not
+            defines if the graph is exponential or not
 
         """
         super().__init__(n_procs)
@@ -74,4 +75,8 @@ class Bipartite(Graph):
 
 
     def is_passive(self, rank):
+        """
+        Returns True if the node is passive, False otherwise
+        """        
+
         return (rank % 2) == 0

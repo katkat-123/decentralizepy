@@ -6,7 +6,7 @@ from decentralizepy.graphs.Graph import Graph
 class Bipartite(Graph):
     """
     The class for generating a Bipartite Graph Topology with passive (even rank) and active (odd rank) nodes.
-    Used for ADPSGD.
+    Used in ADPSGD.
 
     """
 

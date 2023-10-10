@@ -152,17 +152,18 @@ class GossipNode(Node):
 
             if self.dataset.__testing__ and rounds_to_test == 0:
                 rounds_to_test = self.test_after
-                
+                self.msg_stats["msg_sent"][iteration + 1] = self.msg_sent
+                self.msg_stats["msg_aggr"][iteration + 1] = self.msg_aggr
+
+
                 if self.save_not_test:
                     
                     logging.info("Saving model.")
                     if not os.path.exists(os.path.join(self.log_dir, "models")):
                         os.makedirs(os.path.join(self.log_dir, "models"))
 
-                    torch.save(self.model.state_dict(), os.path.join(self.log_dir, "models/{}_model_{}_iter.pt".format(self.uid, iteration)))
-                    self.msg_stats["msg_sent"][iteration] = self.msg_sent
-                    self.msg_stats["msg_aggr"][iteration] = self.msg_aggr
-
+                    torch.save(self.model.state_dict(), os.path.join(self.log_dir, "models/{}_model_{}_iter.pt".format(self.uid, iteration+1)))
+                    
                 else:
 
                     logging.info("Evaluating on test set.")
@@ -250,7 +251,7 @@ class GossipNode(Node):
             self.msg_sent += 1
 
             
-        logging.info("time passed - waiting for receiver thread to join")
+        logging.info("Time passed - waiting for receiver thread to join")
         self.stopper.set()
         receiver_thread.join() 
 
@@ -351,8 +352,8 @@ class GossipNode(Node):
         reset_optimizer=1,
         delta_g=1, #in seconds
         training_time=5, #in minutes
-        eval_on_train=False,
         save_not_test=True,
+        eval_on_train=False,
         *args
     ):
         """
@@ -388,11 +389,11 @@ class GossipNode(Node):
             Timeout in seconds
         training_time   : int
             Duration of training in minutes
-        eval_on_train : bool
-            True if the model should be evaluated on the train set
         save_not_test : bool
             True if the model should be saved each test_after rounds
             False if the model should be evaluated on the test set each test_after rounds
+        eval_on_train : bool
+            True if the model should be evaluated on the train set
         args : optional
             Other arguments
 
@@ -419,7 +420,6 @@ class GossipNode(Node):
         self.init_comm(config["COMMUNICATION"])
 
         self.message_queue = dict()
-
         self.barrier = set()
         self.my_neighbors = self.graph.neighbors(self.uid)
 
@@ -437,8 +437,8 @@ class GossipNode(Node):
         self.msg_aggr = 0
         self.msg_stats = {"msg_sent": {}, "msg_aggr": {}}
 
-        self.eval_on_train = eval_on_train
         self.save_not_test = save_not_test
+        self.eval_on_train = eval_on_train
 
 
     def __init__(   #isws prepei na pernei kai alles parametrous
@@ -455,10 +455,10 @@ class GossipNode(Node):
         test_after=5,
         train_evaluate_after=1,
         reset_optimizer=1,
-        delta_g=0.1, #in seconds
+        delta_g=1.0, #in seconds
         training_time=5, #in minutes
-        eval_on_train=False,
         save_not_test=True,
+        eval_on_train=False,
         *args
     ):
         """
@@ -506,11 +506,11 @@ class GossipNode(Node):
             Timeout in seconds
         training_time   : int
             Duration of training in minutes
-        eval_on_train : bool
-            True if the model should be evaluated on the train set
         save_not_test : bool
             True if the model should be saved each test_after rounds
             False if the model should be evaluated on the test set each test_after rounds
+        eval_on_train : bool
+            True if the model should be evaluated on the train set
         args : optional
             Other arguments
 
@@ -537,8 +537,8 @@ class GossipNode(Node):
             reset_optimizer,
             delta_g,
             training_time,
-            eval_on_train,
             save_not_test,
+            eval_on_train,
             *args
         )
         logging.info(
